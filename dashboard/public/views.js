@@ -9,7 +9,7 @@
     ['runs', 'Runs'], ['quadro', 'Quadro'], ['tabela', 'Tabela'],
     ['timeline', 'Linha do tempo'], ['metricas', 'Métricas'], ['tickets', 'Tickets e PRs'],
     ['redmine', 'Redmine'], ['grafo', 'Grafo'], ['padroes', 'Padrões'], ['prs', 'PRs'],
-    ['coordenacao', 'Coordenação'], ['medicao-modelo', 'Medição de modelo'],
+    ['coordenacao', 'Coordenação'], ['roteamento', 'Roteamento de modelo'],
     ['versao', 'Versão'], ['computador', 'Este computador'],
   ];
   // Etapas agrupadas em 4 fases pra linha do tempo: 7 tons de um matiz não ficam
@@ -24,7 +24,12 @@
   const DAY = 86400000;
 
   // "Meus Tickets" virou "Redmine" (redmine.js): hash/pref antigos caem na aba nova.
-  const alias = v => (v === 'my-tickets' ? 'redmine' : v);
+  // #medicao-modelo virou a aba "Sombra × real" de Roteamento (telas de roteamento, T6).
+  const alias = v => {
+    if (v === 'my-tickets') return 'redmine';
+    if (v === 'medicao-modelo') { window.RoutingTabRequest = 'sombra'; return 'roteamento'; }
+    return v;
+  };
   let view = VIEWS.some(([k]) => k === alias(location.hash.slice(1))) ? alias(location.hash.slice(1))
     : location.hash.startsWith('#run/') ? 'runs' : (VIEWS.some(([k]) => k === alias(prefs.view)) ? alias(prefs.view) : 'runs');
   const table = Object.assign({ sort: 'updated', dir: -1, status: 'all', node: 'all', pr: 'all', hidden: false }, prefs.table || {});
@@ -105,7 +110,7 @@
     ]],
     ['Operação', [
       ['coordenacao', 'Coordenação', 'M4 5h7v6H4zM13 5h7v6h-7zM4 13h7v6H4zM13 13h4v6h-4zM19 16h2'],
-      ['medicao-modelo', 'Medição de modelo', 'M4 19V9M10 19V5M16 19v-6M22 19H2M3 5h4M9 3h4M15 7h4'],
+      ['roteamento', 'Roteamento de modelo', 'M6 3v6a6 6 0 0 0 6 6h6M15 12l3 3-3 3M6 21h.01'],
       ['padroes', 'Padrões de falha', 'M12 3l9 16H3zM12 10v4M12 17h.01'],
     ]],
     ['Conhecimento', [['grafo', 'Grafo', 'M6 6.5h.01M18 5.5h.01M12 18.5h.01M7 7.5l4 9.2M17 6.8l-4 9.9M7.5 6l9-.2']]],
@@ -148,6 +153,7 @@
       `<button type="button" role="tab" data-view="${k}" aria-selected="${k === view}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>${label}</button>`).join(''));
   }
   function setView(v) {
+    v = alias(v);
     view = v; prefs.view = v; persist();
     const want = v === 'runs' ? (selected ? `#run/${encodeURIComponent(selected)}` : '') : `#${v}`;
     if (location.hash !== want) history.replaceState(null, '', want || location.pathname);
@@ -157,7 +163,7 @@
     if (v === 'tickets' && !bulk.running && !bulk.loadedOnce) loadAll(false);
     if (v === 'redmine') window.RedmineView?.load(false);
     if (v === 'coordenacao') window.CoordinationView?.load();
-    if (v === 'medicao-modelo') window.WouldRouteMetricsView?.load();
+    if (v === 'roteamento') window.RoutingView?.load();
     if (v === 'versao') window.VersionView?.load(false);
     if (v === 'computador') window.OnboardingView?.load();
   }
@@ -720,14 +726,14 @@
       const focusKey = document.activeElement?.dataset?.tfilter;
       const domView = {
         coordenacao: window.CoordinationView,
-        'medicao-modelo': window.WouldRouteMetricsView,
+        roteamento: window.RoutingView,
         versao: window.VersionView,
         computador: window.OnboardingView,
       }[view];
       // Visão que devolve sempre o mesmo nó (formulário do onboarding) não é remontada: manter foco e digitação.
       const domNode = domView?.render();
       if (domNode) { if (el.firstChild !== domNode || el.lastChild !== domNode) el.replaceChildren(domNode); }
-      else el.innerHTML = view in { coordenacao: 1, 'medicao-modelo': 1, versao: 1, computador: 1 }
+      else el.innerHTML = view in { coordenacao: 1, roteamento: 1, versao: 1, computador: 1 }
         ? '<div class="vempty">Carregando…</div>' : RENDER[view]();
       el.scrollTop = keepY;
       if (focusKey) el.querySelector(`[data-tfilter="${focusKey}"]`)?.focus();

@@ -9,6 +9,7 @@ const { createVersion } = require('./version');
 const { createOnboarding } = require('./onboarding');
 const { createHoursBackfillJob } = require('./redmine-hours-backfill');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const http = require('http');
 const { execFile, execFileSync } = require('child_process');
@@ -45,6 +46,9 @@ const cycleReplayer = require('../scripts/lib/cycle-replayer');
 const runComparator = require('../scripts/lib/run-comparator');
 const { projectCostTracking } = require('./cost-projection');
 const { buildWouldRouteMetrics } = require('./would-route-metrics');
+const routingProjection = require('./routing-projection');
+// Leitor de roteamento por processo (G3: o dashboard não importa scripts/lib).
+const ROUTING_READ_SCRIPT = path.join(__dirname, '..', 'scripts', 'routing-read.js');
 // Tira PR de Draft ("Marcar como pronto" no painel de preview).
 const { markPrReady } = require('../scripts/check-pr-status');
 // Lista/detalha/aprova PRs do Bitbucket, pra aba "PRs" (GET/POST /api/prs*).
@@ -73,7 +77,6 @@ const notify = require('../scripts/notify');
 const authorization = require('../scripts/lib/authorization');
 const dbEffect = require('../scripts/lib/db-effect');
 const qaHandback = require('../scripts/lib/qa-handback');
-const approvers = require('../scripts/lib/approvers');
 const REPLAY_SCRIPT = path.join(__dirname, '..', 'scripts', 'replay-cycle.js');
 
 // .env do próprio dashboard (cp .env.example .env). Nunca sobrescreve env já setada.
@@ -865,10 +868,26 @@ function createDashboard(options = {}) {
         try { host = new URL(value.includes('://') ? value : `http://${value}`).hostname; } catch { return false; }
         return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
     }
+    // Sem aprovador (decisão de 2026-11-06), este filtro é a única fronteira das ações:
+    // - Origin, quando vier, tem de ser local E na MESMA porta do Dashboard. Outra página
+    //   do localhost (ex.: dev server em :5173) não fala com ele (revisão do Checkpoint B,
+    //   MAJOR-1: POST "simples" sem preflight escrevia).
+    // - Escrita com Sec-Fetch-Site diferente de same-origin/none é recusada. GET não, para
+    //   não quebrar abrir o Dashboard por um link (navegação cross-site).
+    const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+    function sameDashboardPort(origin, req) {
+        let u;
+        try { u = new URL(origin); } catch { return false; }
+        const port = Number(u.port || (u.protocol === 'https:' ? 443 : 80));
+        return Number.isInteger(req.socket?.localPort) && port === req.socket.localPort;
+    }
     function isLocalRequest(req) {
         if (!isLocalHost(req.headers.host)) return false;
         const origin = req.headers.origin;
-        return !origin || isLocalHost(origin);
+        if (origin && (!isLocalHost(origin) || !sameDashboardPort(origin, req))) return false;
+        const site = req.headers['sec-fetch-site'];
+        if (WRITE_METHODS.has(req.method) && site && site !== 'same-origin' && site !== 'none') return false;
+        return true;
     }
 
     app.disable('x-powered-by');
@@ -913,6 +932,149 @@ function createDashboard(options = {}) {
             res.json(redactDeep(buildWouldRouteMetrics(feeds, { recentLimit })));
         } catch (e) {
             res.status(500).json({ error: redact(e.message) });
+        }
+    });
+
+    // Telas de roteamento de modelo (PRI-205; SPEC das telas, T4). Só leitura. Config e
+    // policy vigentes, snapshot de cada Run e NOT_STARTED vêm dos MESMOS leitores do
+    // watcher, por processo: scripts/routing-read.js (regra G3: o dashboard não importa
+    // scripts/lib; mesmo padrão do replay-cycle.js). Snapshot da Run nunca é relido da
+    // config corrente. A projeção (routing-projection.js) só deixa sair campos
+    // permitidos: sem caminhos locais. Snapshot íntegro é imutável e fica em cache pela
+    // ligação; NOT_STARTED, pelo mtime da pasta de Attempts do DOM-06 da Run. Um processo
+    // por requisição, só com o que não está em cache (a config é sempre relida).
+    const routingReadScript = options.routingReadScript || ROUTING_READ_SCRIPT;
+    const routingSnapshotCache = new Map();
+    const routingNotStartedCache = new Map();
+    const ROUTING_CACHE_MAX = 2000;
+    function cachePut(cache, key, value) {
+        if (cache.size >= ROUTING_CACHE_MAX) cache.clear();
+        cache.set(key, value);
+    }
+    function runRoutingRead(input) {
+        return new Promise(resolve => {
+            const child = execFile(process.execPath, [routingReadScript, '--json'],
+                { cwd: repoRoot, env: consumerEnv, timeout: 20000, maxBuffer: 8 * 1024 * 1024 },
+                (err, stdout) => {
+                    let out = null;
+                    try { out = JSON.parse(stdout); } catch { out = null; }
+                    if (err || !out || out.ok !== true) {
+                        if (err || out?.error) console.error(`[dashboard] routing-read: ${redact(out?.error || err?.message || 'sem saída')}`);
+                        return resolve(null);
+                    }
+                    resolve(out);
+                });
+            child.on('error', () => resolve(null));
+            child.stdin.on('error', () => {});
+            child.stdin.end(JSON.stringify(input));
+        });
+    }
+    const ROUTING_LIMIT_DEFAULT = 100;
+    const ROUTING_LIMIT_MAX = 500;
+    app.get('/api/routing', async (req, res) => {
+        let limit = ROUTING_LIMIT_DEFAULT;
+        if (req.query.limit != null) {
+            const n = Number(req.query.limit);
+            if (!Number.isInteger(n) || n < 1 || n > ROUTING_LIMIT_MAX) {
+                return res.status(400).json({ error: `limit deve ser inteiro entre 1 e ${ROUTING_LIMIT_MAX}` });
+            }
+            limit = n;
+        }
+        // ?task=<task-id>: só aquela Run (bloco "Roteamento" do detalhe da Run, T7).
+        const onlyTask = req.query.task != null ? String(req.query.task) : null;
+        if (onlyTask != null && !isRunDirName(onlyTask)) return res.status(400).json({ error: 'task inválida' });
+        try {
+            // 1) Lê os state.json e decide o que o leitor precisa buscar (cache vazio).
+            const entries = [];
+            const toRead = [];
+            const reg = readRegistry();
+            for (const [taskId, candidates] of collectCandidates()) {
+                if (onlyTask != null && taskId !== onlyTask) continue;
+                if (archivedAway(taskId, candidates, reg)) continue;
+                const chosen = pickCandidate(taskId, candidates);
+                if (!chosen) continue;
+                let state = null;
+                try { state = stateWriter.read(chosen.dir) || readJson(path.join(chosen.dir, 'state.json')); } catch { state = null; }
+                const entry = { taskId, dir: path.resolve(chosen.dir), state };
+                entries.push(entry);
+                const binding = state && typeof state === 'object' ? state.routing_snapshot : null;
+                if (!binding) continue;
+                const fetchRunDir = path.join(path.dirname(entry.dir), '_dom06');
+                // mtime e tamanho do arquivo do Attempt de admissão na chave: adulteração
+                // depois da 1ª leitura invalida o cache (revisão do Checkpoint B, MINOR-1).
+                let fileSig = 'absent';
+                if (typeof binding.attempt_id === 'string' && /^[0-9a-f-]{36}$/i.test(binding.attempt_id)) {
+                    try {
+                        const st = fs.statSync(path.join(fetchRunDir, 'dom06', 'attempts', `${binding.attempt_id}.json`));
+                        fileSig = `${st.mtimeMs}:${st.size}`;
+                    } catch { fileSig = 'absent'; }
+                }
+                entry.snapKey = `${fetchRunDir}|${binding.attempt_id}|${binding.sha256}|${fileSig}`;
+                let mtime = null;
+                try { mtime = fs.statSync(path.join(entry.dir, 'dom06', 'attempts')).mtimeMs; } catch { mtime = null; }
+                entry.nsKey = mtime == null ? null : `${entry.dir}|${mtime}`;
+                const needSnap = !routingSnapshotCache.has(entry.snapKey);
+                const needNs = entry.nsKey != null && !routingNotStartedCache.has(entry.nsKey);
+                if (needSnap || needNs) toRead.push({ key: taskId, run_dir: entry.dir, binding, not_started: needNs });
+            }
+            // 2) Um processo do leitor do dono (config sempre; Runs só o que faltou).
+            const read = await runRoutingRead({ repo_root: path.resolve(repoRoot), runs: toRead });
+            const config = routingProjection.projectConfig(read ? read.config : null);
+            const admission_blocked = routingProjection.projectAdmissionBlocked(readJson(path.join(memoryDir, 'routing-admission-blocked.json')));
+            // 3) Projeta.
+            const runs = [];
+            const modelRows = [];
+            const shadowRows = [];
+            const shadowSummary = { SAME: 0, REAL_HIGHER: 0, REAL_LOWER: 0, UNKNOWN: 0 };
+            for (const { taskId, dir, state, snapKey, nsKey } of entries) {
+                const ticketId = ticketIdOf(taskId, state);
+                const updatedAt = typeof state?.updated_at === 'string' ? state.updated_at : null;
+                const unknownRow = error => ({ task_id: taskId, ticket_id: Number.isInteger(ticketId) ? ticketId : null, mode: 'UNKNOWN', error, updated_at: updatedAt });
+                if (!state || typeof state !== 'object') { runs.push(unknownRow('STATE_UNREADABLE')); continue; }
+                try {
+                    const fresh = read?.runs?.[taskId];
+                    let snapshotResult;
+                    if (snapKey) {
+                        snapshotResult = routingSnapshotCache.get(snapKey) || fresh?.snapshot;
+                        if (snapshotResult?.ok === true) cachePut(routingSnapshotCache, snapKey, snapshotResult);
+                    }
+                    let notStarted = null;
+                    if (snapKey) {
+                        if (nsKey == null) notStarted = [];
+                        else if (routingNotStartedCache.has(nsKey)) notStarted = routingNotStartedCache.get(nsKey);
+                        else if (Array.isArray(fresh?.attempts)) {
+                            notStarted = routingProjection.projectNotStarted(fresh.attempts);
+                            cachePut(routingNotStartedCache, nsKey, notStarted);
+                        } else notStarted = 'UNKNOWN';
+                    }
+                    const run = routingProjection.projectRun({ taskId, ticketId, state, current: config, snapshotResult });
+                    const models = routingProjection.projectAttemptModels(state.cost_tracking);
+                    const shadow = routingProjection.projectShadowVsReal(state.cost_tracking);
+                    modelRows.push(...models);
+                    for (const k of Object.keys(shadowSummary)) shadowSummary[k] += shadow.summary[k];
+                    shadowRows.push(...shadow.rows.map(r => ({ task_id: run.task_id, ...r })));
+                    runs.push({ ...run, updated_at: updatedAt, models, not_started: run.mode === 'OFF' ? null : notStarted });
+                } catch {
+                    runs.push(unknownRow('PROJECTION_FAILED'));
+                }
+            }
+            runs.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+            res.json(redactDeep({
+                generated_at: new Date().toISOString(),
+                // Leitor fora do ar: config e snapshots ficam UNKNOWN (nunca OFF).
+                reader: read ? 'OK' : 'FAILED',
+                config,
+                admission_blocked,
+                runs_total: runs.length,
+                runs: runs.slice(0, limit),
+                mix: routingProjection.buildMix(modelRows),
+                shadow_vs_real: { summary: shadowSummary, rows: shadowRows },
+            }));
+        } catch (e) {
+            // Sem e.message na resposta: erro de E/S cita caminho local (critério 7 da
+            // SPEC; revisão do Checkpoint B, MINOR-7). O detalhe vai só para o log.
+            console.error(`[dashboard] /api/routing: ${redact(e.message)}`);
+            res.status(500).json({ error: 'falha ao ler o roteamento' });
         }
     });
 
@@ -1979,30 +2141,16 @@ function createDashboard(options = {}) {
     const handbackFetch = options.handbackFetch || null;     // idem, Redmine
     // Config privilegiada: ~/.config/prisma do usuário do processo; override só por código (testes).
     const prismaConfigDir = options.prismaConfigDir || null;
-    // Aprovador: nome + senha de aprovação (hash scrypt em ~/.config/prisma/approvers.json,
-    // scripts/lib/approvers.js) em TODA ação privilegiada — o dashboard não tem login e
-    // qualquer página que alcance a porta faria POST. Sem credencial → 401; errada → 403;
-    // nada cadastrado → 403 (fail closed). Limites: 5 erros em 5 min por nome e 20 no
-    // total (qualquer nome) → 429; conferência assíncrona (não trava o servidor).
-    const approverFailures = new Map(); // nome → [timestamps]
-    let globalFailures = [];
-    async function requireApprover(req, res) {
-        const name = typeof req.body?.approver === 'string' ? req.body.approver.trim().slice(0, 64) : '';
-        const password = typeof req.body?.approver_password === 'string' ? req.body.approver_password : '';
-        const now = Date.now();
-        const recent = (approverFailures.get(name) || []).filter(t => now - t < 5 * 60 * 1000);
-        globalFailures = globalFailures.filter(t => now - t < 5 * 60 * 1000);
-        if (recent.length >= 5 || globalFailures.length >= 20) { res.status(429).json({ ok: false, code: 'TOO_MANY_ATTEMPTS', error: 'muitas tentativas erradas — espere alguns minutos' }); return null; }
-        const v = await approvers.verify(name, password, { configDir: prismaConfigDir });
-        if (v.ok) { approverFailures.delete(name); return v.name; }
-        if (v.code === 'DENIED') {
-            if (approverFailures.size > 1000) approverFailures.clear();
-            approverFailures.set(name, [...recent, now]);
-            globalFailures.push(now);
-        }
-        res.status(v.code === 'MISSING' ? 401 : 403).json({ ok: false, code: v.code === 'MISSING' ? 'APPROVER_REQUIRED' : v.code === 'NO_APPROVERS' ? 'NO_APPROVERS' : 'APPROVER_DENIED', error: v.error });
-        return null;
-    }
+    // Autoria das ações privilegiadas (autorização de SQL, devolução ao QA, override de
+    // roteamento). Decisão do Richard em 2026-11-06: sem aprovador nem senha até existirem
+    // roles — quem tem acesso ao Dashboard executa. O acesso continua restrito ao filtro
+    // global de localhost (Host e Origin locais: bloqueia páginas de terceiros e DNS
+    // rebinding). A autoria gravada é o usuário do sistema operacional que roda o
+    // Dashboard. scripts/lib/approvers.js fica para quando houver roles.
+    const LOCAL_ACTOR = (() => {
+        try { return os.userInfo().username || 'dashboard-local'; } catch { return 'dashboard-local'; }
+    })();
+    const actorOf = () => LOCAL_ACTOR;
     function pushRun(taskId) {
         const fresh = resolveRun(taskId);
         if (fresh) {
@@ -2061,8 +2209,6 @@ function createDashboard(options = {}) {
             const targetAlias = typeof req.query.target === 'string' && dbEffect.ALIAS_RE.test(req.query.target) ? req.query.target : null;
             request = authorization.describeRequest(run.dir, { targetAlias });
         }
-        let approversConfigured = false;
-        try { approversConfigured = Object.keys(approvers.loadApprovers({ configDir: prismaConfigDir }).approvers).length > 0; } catch { approversConfigured = false; }
         const executor = (dbExecutor || dbEffect.createChildExecutor({ configDir: prismaConfigDir })).available?.() || { ok: true };
         const ticketId = authorization.ticketOfTask(run.taskId);
         const showHandback = canHandback(state) || p?.then === 'handback_qa';
@@ -2070,15 +2216,13 @@ function createDashboard(options = {}) {
             taskId: run.taskId, ticketId, status: state.status, pending: p,
             history: Array.isArray(state.authorization_history) ? state.authorization_history : [],
             artifact, problems, request, executor, max_sql_bytes: dbEffect.MAX_SQL_BYTES,
-            approvers_configured: approversConfigured,
             handback: { available: !run.archived && canHandback(state), preview: showHandback ? qaHandback.preview(run.dir) : null },
         });
     });
 
-    // Bancos da allowlist para o seletor do Aprovar — só para aprovador autenticado; só
-    // alias, rótulo, ambiente e host/banco mascarados (display "visible" mostra).
+    // Bancos da allowlist para o seletor do Aprovar (acesso local, sem aprovador desde
+    // 2026-11-06); só alias, rótulo, ambiente e host/banco mascarados.
     app.post('/api/authorization/targets', async (req, res) => {
-        if (!await requireApprover(req, res)) return;
         const out = dbEffect.publicTargets({ configDir: prismaConfigDir });
         res.json({ ok: !out.error, targets: out.targets, error: out.error });
     });
@@ -2086,8 +2230,7 @@ function createDashboard(options = {}) {
     async function decideAndExecute(req, res, mode) {
         const ctx = authorizationRun(req, res);
         if (!ctx) return;
-        const by = await requireApprover(req, res);
-        if (!by) return;
+        const by = actorOf();
         const { run, state } = ctx;
         if (authorizing.has(run.taskId)) return res.status(409).json({ error: 'outra decisão deste run está em andamento' });
         const expect = humanExpect(req, state);
@@ -2137,8 +2280,7 @@ function createDashboard(options = {}) {
     app.post('/api/runs/:taskId/authorization/reject', async (req, res) => {
         const ctx = authorizationRun(req, res);
         if (!ctx) return;
-        const by = await requireApprover(req, res);
-        if (!by) return;
+        const by = actorOf();
         const { run, state } = ctx;
         const expect = humanExpect(req, state);
         const operationId = operationIdOf(req);
@@ -2157,15 +2299,14 @@ function createDashboard(options = {}) {
     });
 
     // PRI-233 T8 (P-2): override humano de roteamento. Mesma autoridade das decisões de
-    // autorização (aprovador cadastrado + CAS/operation_id), mesmo writer
+    // autorização (acesso local + CAS/operation_id; sem aprovador desde 2026-11-06), mesmo writer
     // (scripts/lib/authorization.js), sem pausar a Run e recusado com nó rodando (como as
     // demais decisões). Vale a partir do próximo limite de nó; elegibilidade conferida
     // pelo resolver contra o snapshot da Run.
     app.post('/api/runs/:taskId/routing-override', async (req, res) => {
         const ctx = authorizationRun(req, res);
         if (!ctx) return;
-        const by = await requireApprover(req, res);
-        if (!by) return;
+        const by = actorOf();
         const { run, state } = ctx;
         const expect = humanExpect(req, state);
         const operationId = operationIdOf(req);
@@ -2194,8 +2335,7 @@ function createDashboard(options = {}) {
         if (!ctx) return;
         const { run, state } = ctx;
         if (!canHandback(state)) return res.status(409).json({ error: `devolver ao QA só vale para run blocked/${authorization.STATUS} (status atual: ${state.status})` });
-        const by = await requireApprover(req, res);
-        if (!by) return;
+        const by = actorOf();
         if (authorizing.has(run.taskId)) return res.status(409).json({ error: 'outra decisão deste run está em andamento' });
         const expect = humanExpect(req, state);
         const operationId = operationIdOf(req);

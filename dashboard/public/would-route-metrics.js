@@ -1,6 +1,6 @@
 // Aba "Medição de modelo": GET /api/would-route-metrics — agrega would_route em sombra.
 // Padrão Coordination/Watcher: módulo próprio, load()/render() DOM, plugado em Views.
-// Estilos: screens/would-route.css. Nunca liga S4 / troca de modelo.
+// Estilos: screens/would-route.css. Só mede a sombra; nunca altera o despacho. Embutida na aba "Sombra × real" de Roteamento (routing.js).
 (() => {
   let data, error, loading = false, reload = false;
   const el = (tag, text, className) => {
@@ -44,7 +44,7 @@
     const title = el('div', null, 'wr-title');
     title.append(
       el('p', 'Operação · somente leitura · sombra', 'label'),
-      el('h2', 'Medição de modelo', 't-title'),
+      el('h2', 'Medição em sombra (S3)', 't-title'),
       el('p', 'O que o roteamento em sombra teria escolhido (leve / médio / Opus), sem trocar o modelo no despacho.'),
     );
     const actions = el('div', null, 'wr-actions');
@@ -59,8 +59,8 @@
     const banner = el('p', null, 'wr-banner');
     banner.setAttribute('role', 'status');
     banner.append(
-      el('strong', 'Sombra ligada · troca real desligada. '),
-      document.createTextNode('O watcher continua despachando como sempre (AS-IS). Esta tela só mede would_route.'),
+      el('strong', 'Só medição em sombra. '),
+      document.createTextNode('Esta seção mede would_route e nunca altera o despacho. O roteamento real (por projeto, com o snapshot de cada Run) está na aba Hoje.'),
     );
     root.append(banner);
 
@@ -114,14 +114,14 @@
       if (diag.policy_file) {
         body.append(el('p', `Arquivo da policy de sombra: ${diag.policy_file}`, 'source-note'));
       }
-      body.append(el('p', 'Isto não liga S4: mesmo com cheap_rule, o despacho continua AS-IS.', 'source-note'));
+      body.append(el('p', 'A sombra não altera o despacho: o modelo real de cada Run aparece na aba Hoje.', 'source-note'));
       panel.append(body);
       root.append(panel);
     }
 
     const savings = el('section', null, 'panel wr-savings');
     const savHead = el('div', null, 'panel-head');
-    savHead.append(el('h3', 'Economia potencial vs Opus-only', 't-heading'));
+    savHead.append(el('h3', 'Economia potencial vs Opus-only — hipótese de preço, não custo real', 't-heading'));
     savings.append(savHead);
     const savBody = el('div', null, 'wr-savings-body');
     const grid = el('div', null, 'kpis wr-counts');
@@ -147,7 +147,7 @@
     recent.append(recentHead);
     const rows = Array.isArray(data.recent) ? data.recent : [];
     if (!rows.length) {
-      recent.append(el('p', 'Nenhuma decisão sombra ainda. Com a policy em cheap_rule, feche novos Implements (Attempts antigos com CLASSIFIER_OFF não reclassificam). S4 continua desligado.', 'wr-empty muted'));
+      recent.append(el('p', 'Nenhuma decisão sombra ainda. Com a policy em cheap_rule, feche novos Implements (Attempts antigos com CLASSIFIER_OFF não reclassificam).', 'wr-empty muted'));
     } else {
       const wrap = el('div', null, 'table-wrap wr-table-wrap');
       const table = el('table', null, 'table wr-table');

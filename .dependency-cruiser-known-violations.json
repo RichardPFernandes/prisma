@@ -458,20 +458,6 @@
   {
     "type": "dependency",
     "from": "dashboard/server.js",
-    "to": "scripts/lib/approvers.js",
-    "unresolvedTo": "../scripts/lib/approvers",
-    "dependencyTypes": [
-      "local",
-      "require"
-    ],
-    "rule": {
-      "severity": "error",
-      "name": "no-dashboard-scripts-internals"
-    }
-  },
-  {
-    "type": "dependency",
-    "from": "dashboard/server.js",
     "to": "scripts/lib/authorization.js",
     "unresolvedTo": "../scripts/lib/authorization",
     "dependencyTypes": [

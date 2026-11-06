@@ -196,7 +196,7 @@ function aggregateWouldRoute(runs, opts = {}) {
         status: 'ok',
         shadow_only: true,
         s4_enabled: false,
-        note: 'Medição em sombra (would_route). Despacho continua AS-IS; S4 não ligado.',
+        note: 'Medição em sombra (would_route). Não altera o despacho; o roteamento real está em /api/routing.',
         pricing_hypothesis: {
             description: 'Economia potencial vs Opus-only usa razões aproximadas de preço de input (Haiku/Sonnet/Opus).',
             cost_ratio_vs_opus: { ...COST_RATIO_VS_OPUS },
@@ -253,8 +253,8 @@ function buildDiagnosis({ decisions, no_decision, causes, rows }) {
             code: 'OK',
             primary_cause: null,
             title_pt: 'Medição com decisões sombra',
-            explanation_pt: 'Há decisões classificadas por faixa. Despacho continua AS-IS (S4 desligado).',
-            next_step_pt: 'Usar contagens e economia potencial como evidência antes de qualquer decisão de S4.',
+            explanation_pt: 'Há decisões classificadas por faixa. A sombra não altera o despacho.',
+            next_step_pt: 'Usar contagens e economia potencial como evidência na calibração da policy (S6), nunca como custo real.',
             policy_file: POLICY_SHADOW_FILE,
             causes: { ...causes },
             classifier_providers: providers,
@@ -270,7 +270,7 @@ function buildDiagnosis({ decisions, no_decision, causes, rows }) {
             title_pt: 'Parte das Attempts ainda sem decisão',
             explanation_pt: `Há ${decisions} decisão(ões) sombra e ${no_decision} Attempt(s) sem decisão (causa top: ${topCause || 'desconhecida'}). Attempts antigas com provider=off não ganham faixa sozinhas.`,
             next_step_pt: topCause === 'CLASSIFIER_OFF'
-                ? `Ligar cheap_rule em ${POLICY_SHADOW_FILE} e gerar novos Attempts; S4 continua desligado.`
+                ? `Ligar cheap_rule em ${POLICY_SHADOW_FILE} e gerar novos Attempts.`
                 : 'Conferir causas no painel e policy/sinais dos Attempts sem decisão.',
             policy_file: POLICY_SHADOW_FILE,
             causes: { ...causes },
@@ -286,7 +286,7 @@ function buildDiagnosis({ decisions, no_decision, causes, rows }) {
             primary_cause: 'CLASSIFIER_OFF',
             title_pt: 'Zeros esperados: classificador sombra desligado',
             explanation_pt: 'A infraestrutura gravou would_route (Attempts > 0), mas estes registros foram feitos com classifier.provider=off (ou a policy foi revertida). Nesse modo não há classes/faixas — só NO_DECISION. Attempts antigos não são reescritos.',
-            next_step_pt: `Com a policy atual em cheap_rule, reinicie o watcher e feche novos Implements — só eles ganham faixas. Attempts CLASSIFIER_OFF permanecem sem decisão. S4 continua desligado.`,
+            next_step_pt: `Com a policy atual em cheap_rule, reinicie o watcher e feche novos Implements — só eles ganham faixas. Attempts CLASSIFIER_OFF permanecem sem decisão.`,
             policy_file: POLICY_SHADOW_FILE,
             causes: { ...causes },
             classifier_providers: providers,

@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -b --pretty false",
     "check:js": "tsc -p tsconfig.checkjs.json --pretty false --noEmit",
-    "test": "node ../harness/run-tests.js scripts lib/*.test.js validate-state.test.js invalidate.test.js invalidate-concurrency.test.js state-concurrency.test.js sanitize-log.test.js retry.test.js notify.test.js memory-consolidator.test.js cleanup-runs.test.js cleanup-transcripts.test.js compare-runs.test.js bitbucket-open-pr.test.js ../harness/run-tests.test.js platform-roots.test.js architecture-boundaries.test.js",
+    "test": "node ../harness/run-tests.js scripts lib/*.test.js validate-state.test.js invalidate.test.js invalidate-concurrency.test.js state-concurrency.test.js sanitize-log.test.js retry.test.js notify.test.js memory-consolidator.test.js cleanup-runs.test.js cleanup-transcripts.test.js compare-runs.test.js bitbucket-open-pr.test.js ../harness/run-tests.test.js platform-roots.test.js routing-read.test.js architecture-boundaries.test.js",
     "arch:check": "node run-architecture-cruise.js --check",
     "arch:baseline": "node run-architecture-cruise.js --baseline",
     "lint:src": "node ../scripts/run-eslint-src.js"

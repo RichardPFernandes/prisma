@@ -150,7 +150,23 @@ test('Host/Origin não-locais são recusados (DNS rebinding / página de terceir
     });
     assert.strictEqual(await status({ Host: 'evil.example:3333' }), 403);
     assert.strictEqual(await status({ Host: 'localhost', Origin: 'https://evil.example' }), 403);
-    assert.strictEqual(await status({ Host: 'localhost', Origin: 'http://localhost:3333' }), 200);
+    const port = dash.server.address().port;
+    assert.strictEqual(await status({ Host: `localhost:${port}`, Origin: `http://localhost:${port}` }), 200, 'mesma origem passa');
+    // Revisão do Checkpoint B (MAJOR-1): outra porta do localhost é outra origem.
+    assert.strictEqual(await status({ Host: `localhost:${port}`, Origin: `http://localhost:${port === 5173 ? 5174 : 5173}` }), 403);
+    assert.strictEqual(await status({ Host: 'localhost', Origin: `http://127.0.0.1:${port}` }), 200, 'localhost e 127.0.0.1 na mesma porta');
+});
+
+test('escrita com Sec-Fetch-Site cross-site/same-site é recusada; navegação GET por link continua', async () => {
+    const port = dash.server.address().port;
+    const req = (method, headers) => new Promise((resolve, reject) => {
+        const r = http.request({ host: '127.0.0.1', port, path: '/api/runs', method, headers: { Host: `localhost:${port}`, ...headers } }, res => { res.resume(); resolve(res.statusCode); });
+        r.on('error', reject);
+        r.end();
+    });
+    assert.strictEqual(await req('POST', { 'Sec-Fetch-Site': 'same-site' }), 403);
+    assert.strictEqual(await req('POST', { 'Sec-Fetch-Site': 'cross-site' }), 403);
+    assert.strictEqual(await req('GET', { 'Sec-Fetch-Site': 'cross-site' }), 200, 'abrir por link não é escrita');
 });
 
 test('WebSocket: mudança em state.json chega como state_update em ≤3s', async () => {

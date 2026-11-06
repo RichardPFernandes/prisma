@@ -577,6 +577,7 @@
 <link rel="stylesheet" href="screens/patterns.css">
 <link rel="stylesheet" href="screens/coordination.css">
 <link rel="stylesheet" href="screens/would-route.css">
+<link rel="stylesheet" href="screens/routing.css">
 <link rel="stylesheet" href="screens/run-subtasks.css">
 <link rel="stylesheet" href="screens/system.css">
 <link rel="stylesheet" href="screens/compare.css">
@@ -1675,6 +1676,7 @@ function renderDetail() {
       </div>` : ''}
       ${r.status === 'awaiting_approval' && s.status !== 'authorization-pending' ? `<div id="approvalBox">${approvalHtml(r)}</div>` : ''}
       ${window.Authorization ? Authorization.html(r) : ''}
+      ${window.RoutingRun ? RoutingRun.html(r) : ''}
       <div id="intBanner">${interruptedHtml(s)}</div>
       <div id="prAlert">${prAlertHtml(prRows(r))}</div>
       ${qaRetryBlockedInfo(r) ? `<div class="risk-box" role="status"><h4>⚠ Retry QA bloqueado</h4><p>${esc(QA_RETRY_BLOCKED_LABEL[qaRetryBlockedInfo(r).reason] || qaRetryBlockedInfo(r).reason)}</p><small>O sinal retry-signal.json permanece; o watcher não despacha em duplicata. Resolva a causa — o próximo tick tenta de novo.${qaRetryBlockedInfo(r).at ? ` Registrado em ${esc(when(qaRetryBlockedInfo(r).at))}.` : ''}</small></div>` : ''}
@@ -1743,6 +1745,7 @@ function renderDetail() {
 
   wireDetail(r);
   window.Authorization?.wire(r);
+  window.RoutingRun?.wire(r);
   wireFolds(r);
   wireEventsTimeline(r);
   wireTranscripts(r);
@@ -3280,6 +3283,7 @@ document.addEventListener('click', async e => {
 <script src="patterns.js"></script>
 <script src="coordination.js"></script>
 <script src="would-route-metrics.js"></script>
+<script src="routing.js"></script>
 <script src="version.js"></script>
 <script src="onboarding.js"></script>
 <script src="prs.js"></script>
@@ -3295,5 +3299,6 @@ document.addEventListener('click', async e => {
 <script src="preview.js"></script>
 <script src="context-md.js"></script>
 <script src="authorization.js"></script>
+<script src="routing-run.js"></script>
 </body>
 </html>

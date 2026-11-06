@@ -18,7 +18,11 @@ const APPROVER_PW = 'senha-aprovador-SENTINEL-55';
 const DB_USER = 'usuario_banco_sentinel';
 const approvers = require('../scripts/lib/approvers');
 const prismaConfig = require('../scripts/lib/prisma-config');
+// Sem aprovador desde 2026-11-06 (decisão do Richard, até existirem roles): o body ainda
+// pode mandar approver/senha (telas antigas), mas o servidor ignora; a autoria gravada é o
+// usuário do sistema operacional que roda o Dashboard.
 const CRED = { approver: 'richard', approver_password: APPROVER_PW };
+const LOCAL_ACTOR = require('node:os').userInfo().username;
 const tmpBase = process.env.CLAUDE_JOB_DIR ? path.join(process.env.CLAUDE_JOB_DIR, 'tmp') : os.tmpdir();
 const tmp = fs.mkdtempSync(path.join(tmpBase, 'authorization-api-'));
 const repo = path.join(tmp, 'app-back');
@@ -141,7 +145,7 @@ test('GET /authorization: pedido com conteúdo do SQL, hash conferido e alvo da 
     assert.deepStrictEqual([body.artifact.sha256_now, body.artifact.matches], [SHA, true]);
     assert.strictEqual(body.target, undefined, 'sem dados de alvo sem autenticar');
     assert.strictEqual(body.pending.target_hint.alias, 'qa-app');
-    assert.strictEqual(body.approvers_configured, true);
+    assert.strictEqual(body.approvers_configured, undefined, 'sem aprovador: o campo não existe mais');
     assert.strictEqual(body.handback.available, true);
     assert.strictEqual(body.ticketId, 42359);
     assert.match(body.handback.preview.notes, /Devolvido ao QA/, 'aprovador vê a nota antes');
@@ -164,26 +168,21 @@ test('C3: o SQL aparece INTEGRAL na tela, sem redação (o que parece segredo ta
     assert.ok(!body.artifact.content.includes('***'));
 });
 
-test('targets: só para aprovador autenticado (401 sem, 403 errado); lista alias/rótulo, host/banco mascarados', async () => {
-    assert.strictEqual((await post('/api/authorization/targets', {})).status, 401);
-    assert.strictEqual((await post('/api/authorization/targets', { approver: 'richard', approver_password: 'errada' })).status, 403);
-    assert.strictEqual((await post('/api/authorization/targets', { approver: 'intruso', approver_password: APPROVER_PW })).status, 403);
-    const ok = await post('/api/authorization/targets', CRED);
+test('targets: acesso local sem aprovador; lista alias/rótulo, host/banco mascarados', async () => {
+    const ok = await post('/api/authorization/targets', {});
     assert.strictEqual(ok.status, 200, ok.text);
     const qa = ok.body.targets.find(t => t.alias === 'qa-app');
     assert.deepStrictEqual([qa.label, qa.env, qa.selectable, qa.host], ['QA – embarc', 'qa', true, 'db…o']);
     assert.strictEqual(ok.body.targets.find(t => t.alias === 'prod-app').selectable, false);
 });
 
-test('approve/manual/reject/handback sem aprovador → 401; senha errada → 403; nada muda', async () => {
+test('sem aprovador: approve/manual sem hash do pedido continuam recusados pelo writer; nada muda', async () => {
     writeRun('42365-recusa-g');
     const token = await casOf('42365-recusa-g');
-    for (const [p, extra] of [['authorization/approve', { artifact_sha256: SHA, target_alias: 'qa-app' }], ['authorization/manual', {}], ['authorization/reject', {}], ['handback-qa', {}]]) {
-        const none = await post(`/api/runs/42365-recusa-g/${p}`, { ...token, authorization_id: 'AUTH-001', operation_id: `op-noauth-${p.replace(/\W/g, '')}`, ...extra });
-        assert.strictEqual(none.body.code, 'APPROVER_REQUIRED');
-        assert.strictEqual(none.status, 401, p);
-        const wrong = await post(`/api/runs/42365-recusa-g/${p}`, { ...token, authorization_id: 'AUTH-001', operation_id: `op-wrong-${p.replace(/\W/g, '')}`, approver: 'richard', approver_password: 'chute', ...extra });
-        assert.strictEqual(wrong.status, 403, p);
+    for (const p of ['authorization/approve', 'authorization/manual']) {
+        const out = await post(`/api/runs/42365-recusa-g/${p}`, { ...token, authorization_id: 'AUTH-001', target_alias: 'qa-app', operation_id: `op-nohash-${p.replace(/\W/g, '')}` });
+        assert.strictEqual(out.body.code, 'REQUEST_HASH_REQUIRED', p);
+        assert.ok(out.status >= 400, p);
     }
     assert.strictEqual(calls.length, 0);
     const s = readState('42365-recusa-g');
@@ -200,7 +199,7 @@ test('approve: alias fora da allowlist ou de produção sem allow_production →
     const prod = await post('/api/runs/42366-recusa-h/authorization/approve', { ...token, ...CRED, authorization_id: 'AUTH-001', request_hash: await hashOf('42366-recusa-h', 'prod-app'), target_alias: 'prod-app', operation_id: 'op-alias-2' });
     assert.strictEqual(prod.body.code, 'PRODUCTION_REFUSED');
     const evil = await post('/api/runs/42366-recusa-h/authorization/approve', { ...token, approver: 'intruso', approver_password: 'senha-do-intruso-1', authorization_id: 'AUTH-001', request_hash: 'x', target_alias: 'evil', operation_id: 'op-alias-3' });
-    assert.strictEqual(evil.status, 403, 'A1: aprovador/allowlist do env/.env não valem');
+    assert.deepStrictEqual([evil.status, evil.body.code], [409, 'TARGET_NOT_ALLOWED'], 'A1: allowlist do env/.env não vale');
     assert.strictEqual(calls.length, 0);
 });
 
@@ -227,7 +226,7 @@ test('approve: CAS velho → 409 sem executar; com a versão da tela executa, de
     assert.match(JSON.parse(put.body).issue.notes, /qa-app/);
     const archived = JSON.parse(fs.readFileSync(path.join(runs, '_archive', '42360-recusa-b', 'state.json'), 'utf8'));
     assert.strictEqual(archived.status, 'handed_back_qa');
-    assert.ok(archived.authorization_history.some(e => e.event === 'approved' && e.by === 'richard' && e.via === 'dashboard' && e.target === 'qa-app'), 'by = aprovador autenticado, não o "by" do body');
+    assert.ok(archived.authorization_history.some(e => e.event === 'approved' && e.by === LOCAL_ACTOR && e.via === 'dashboard' && e.target === 'qa-app'), 'by = usuário do sistema operacional, não o "by" nem o approver do body');
     assert.ok(!JSON.stringify(archived).includes(DB_USER));
     // Não entra no registro do dashboard: segue visível como arquivado com demanda aberta
     // e uma nova Recusa QA reaproveita o run pelo "Corrigir recusa QA".
@@ -242,7 +241,7 @@ test('reject: volta para blocked com o motivo; dá para responder ao agente', as
     assert.strictEqual(r.status, 200, r.text);
     const s = readState('42361-recusa-c');
     assert.strictEqual(s.status, 'blocked');
-    assert.match(s.blocked_reason, /recusada por richard: não neste ambiente/);
+    assert.match(s.blocked_reason, new RegExp(`recusada por ${LOCAL_ACTOR}: não neste ambiente`));
     assert.strictEqual(s.pending_authorization, undefined);
     const msg = await post('/api/runs/42361-recusa-c/message', { message: 'tente pelo código então' });
     assert.strictEqual(msg.status, 200);
@@ -261,7 +260,7 @@ test('manual: registra quem, roda só o verify e segue o then (resume:review)', 
     assert.strictEqual(calls.at(-1).mode, 'verify');
     const s = readState('42362-recusa-d');
     assert.deepStrictEqual([s.status, s.node], ['in_progress', 'review']);
-    assert.ok(s.authorization_history.some(e => e.event === 'manual_applied' && e.by === 'dba'));
+    assert.ok(s.authorization_history.some(e => e.event === 'manual_applied' && e.by === LOCAL_ACTOR));
 });
 
 test('handback-qa: 422 não arquiva (blocked com o campo); depois de corrigido, devolve e arquiva', async () => {
@@ -328,20 +327,17 @@ function bindRouted(dir) {
     fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ ...s, routing_snapshot: { attempt_id: fetch.attempt.attempt_id, sha256: snap.sha256 } }));
 }
 
-test('PRI-233 T8: POST routing-override grava a override com aprovador e CAS, sem mudar status', async () => {
+test('PRI-233 T8: POST routing-override grava a override com CAS e autoria local, sem mudar status', async () => {
     const id = '42370-routing-a';
     const dir = writeRun(id, { status: 'in_progress', pending: false });
     bindRouted(dir);
     const body = { scope: 'node', node: 'implement', model_id: 'claude-opus-5-5', effort: 'alto' };
 
-    const denied = await post(`/api/runs/${id}/routing-override`, { ...(await casOf(id)), ...body, approver: 'richard', approver_password: 'chute', operation_id: 'op-route-deny' });
-    assert.strictEqual(denied.status, 403);
-    assert.strictEqual(readState(id).routing_overrides, undefined, 'senha errada não grava');
-
-    const ok = await post(`/api/runs/${id}/routing-override`, { ...(await casOf(id)), ...body, ...CRED, operation_id: 'op-route-ok-1' });
+    // Sem aprovador: approver/senha no body são ignorados; a autoria é o usuário do SO.
+    const ok = await post(`/api/runs/${id}/routing-override`, { ...(await casOf(id)), ...body, approver: 'outro-nome', approver_password: 'qualquer', operation_id: 'op-route-ok-1' });
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
     assert.deepStrictEqual([ok.body.ok, ok.body.override.ref, ok.body.override.by, ok.body.override.value],
-        [true, 'RO-1', 'richard', { model_id: 'claude-opus-5-5', effort: 'alto' }]);
+        [true, 'RO-1', LOCAL_ACTOR, { model_id: 'claude-opus-5-5', effort: 'alto' }]);
     const after = readState(id);
     assert.strictEqual(after.status, 'in_progress', 'a Run não pausa');
     assert.strictEqual(after.routing_overrides.length, 1);
@@ -374,8 +370,25 @@ test('PRI-233 T8: routing-override recusa Run OFF, entrada inválida e nó rodan
     assert.strictEqual(readState(on).routing_overrides, undefined);
 });
 
-test('B3: rate limit global além do por nome (nomes variados) → 429', async () => {
-    let last = null;
-    for (let i = 0; i < 22; i++) last = await post('/api/authorization/targets', { approver: `chute${i}`, approver_password: 'errada' });
-    assert.strictEqual(last.status, 429);
+test('acesso só local: pedido com Origin de terceiro é recusado antes de qualquer ação (403)', async () => {
+    // Sem aprovador, a fronteira é o filtro de localhost (Host e Origin locais).
+    const res = await fetch(`${base}/api/authorization/targets`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://site-de-terceiro.example' }, body: '{}' });
+    assert.strictEqual(res.status, 403);
+});
+
+test('revisão do Checkpoint B (MAJOR-1): POST "simples" de outra porta do localhost não escreve em nada', async () => {
+    const id = '42371-csrf-a';
+    writeRun(id, { status: 'blocked', pending: false });
+    const port = new URL(base).port;
+    const otherOrigin = `http://localhost:${Number(port) === 5173 ? 5174 : 5173}`;
+    const before = JSON.stringify(readState(id));
+    const putsBefore = seen.filter(r => r.method === 'PUT').length;
+    for (const p of ['handback-qa', 'authorization/reject', 'routing-override']) {
+        const res = await fetch(`${base}/api/runs/${id}/${p}`, { method: 'POST', headers: { 'Content-Type': 'text/plain', Origin: otherOrigin }, body: '' });
+        assert.strictEqual(res.status, 403, p);
+        const siteRes = await fetch(`${base}/api/runs/${id}/${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-site' }, body: '{}' });
+        assert.strictEqual(siteRes.status, 403, `${p} com Sec-Fetch-Site same-site`);
+    }
+    assert.strictEqual(JSON.stringify(readState(id)), before, 'state intacto');
+    assert.strictEqual(seen.filter(r => r.method === 'PUT').length, putsBefore, 'nenhum PUT no Redmine');
 });

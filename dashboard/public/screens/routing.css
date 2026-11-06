@@ -1,0 +1,97 @@
+/* screens/routing.css — Roteamento de modelo (PRI-205, telas de roteamento). Design Espectro, padrão Operação. */
+
+.routing { display: flex; flex-direction: column; gap: 20px; max-width: 1280px; min-width: 0; }
+.routing .rt-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 0; }
+.rt-title { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.routing .rt-title h2 { margin: 0; letter-spacing: -0.015em; }
+.routing .rt-title p:not(.label) { margin: 0; color: var(--text-secondary); font-size: 14px; max-width: 80ch; }
+
+.rt-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.rt-tab { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px; font: inherit; color: var(--muted); cursor: pointer; }
+.rt-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+
+.rt-banner {
+  margin: 0; padding: 12px 16px; border: 1px solid var(--border); border-left: 3px solid var(--state-waiting-fg);
+  background: var(--state-waiting-bg); color: var(--text); font-size: 13px; line-height: 1.45;
+}
+
+.routing .panel { overflow: hidden; min-width: 0; }
+.rt-body { display: flex; flex-direction: column; gap: 12px; padding: 16px; min-width: 0; }
+.rt-body p, .rt-run p { margin: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.rt-muted { color: var(--muted); font-size: 13px; }
+.rt-note { color: var(--text-secondary); font-size: 13px; padding: 8px 12px; background: var(--raised); border-left: 3px solid var(--accent); }
+.rt-warn { color: var(--state-failed-fg); font-weight: 600; }
+
+.rt-state { font-weight: 600; font-size: 15px; }
+.rt-state-on { color: var(--state-done-fg); }
+.rt-state-off { color: var(--text-secondary); }
+.rt-state-refused { color: var(--state-failed-fg); }
+.rt-state-unknown { color: var(--state-waiting-fg); }
+.rt-glyph { display: inline-block; min-width: 1.2em; font-weight: 700; text-align: center; }
+
+.rt-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px 16px; margin: 0; }
+.rt-meta div { min-width: 0; }
+.rt-meta dt { font-size: 12px; color: var(--muted); }
+.rt-meta dd { margin: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; overflow-wrap: anywhere; }
+
+.rt-scroll { overflow-x: auto; max-width: 100%; }
+.rt-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.routing .rt-table { width: 100%; font-size: 13px; border-collapse: collapse; }
+.routing .rt-table th, .routing .rt-table td { text-align: left; padding: 8px 10px; vertical-align: top; white-space: nowrap; }
+.routing .rt-table caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.routing .rt-default th, .routing .rt-default td { border-top: 1px solid var(--border); font-weight: 600; }
+
+.rt-filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px 0; }
+.rt-filter { font-size: 13px; }
+.rt-filter[aria-pressed="true"] { background: var(--raised); border-color: var(--accent); color: var(--text); }
+.rt-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.rt-run-list { list-style: none; margin: 0; padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
+.rt-run { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--border); border-left-width: 3px; min-width: 0; }
+.rt-run-on { border-left-color: var(--state-done-fg); }
+.rt-run-off { border-left-color: var(--border); }
+.rt-run-refused { border-left-color: var(--state-failed-fg); }
+.rt-run-unknown { border-left-color: var(--state-waiting-fg); }
+.rt-run-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+.rt-line { font-size: 13px; color: var(--text-secondary); }
+.rt-sublist { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.rt-sublist li { overflow-wrap: anywhere; }
+.rt-models { list-style: none; padding-left: 0; }
+
+button.linkish.rt-open { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; overflow-wrap: anywhere; }
+
+.rt-mix-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.rt-mix-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.6fr); gap: 4px 12px; font-size: 13px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.rt-mix-model { font-family: var(--font-mono, ui-monospace, monospace); overflow-wrap: anywhere; }
+.rt-mix-n, .rt-mix-cost { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+.rt-empty { margin: 0; padding: 20px 16px; text-align: center; color: var(--muted); }
+.rt-foot { margin: 0; }
+
+@media (max-width: 640px) {
+  .rt-mix-row { grid-template-columns: 1fr; }
+  .rt-run-list, .rt-filters { padding-left: 12px; padding-right: 12px; }
+  .rt-body { padding: 12px; }
+}
+
+/* T6: aba Sombra × real */
+.rt-shadow-sum { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rt-shadow-n { display: inline-flex; align-items: baseline; gap: 4px; }
+.rt-shadow-row { line-height: 1.5; }
+.rt-s3 { border-top: 1px solid var(--border); padding-top: 20px; min-width: 0; }
+.rt-s3 .would-route { max-width: none; }
+.rt-panel { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+
+/* T7b: seletor do classificador */
+.rt-cls-options { display: flex; flex-direction: column; gap: 8px; }
+.rt-cls-option { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); cursor: pointer; min-width: 0; }
+.rt-cls-option.is-disabled { cursor: not-allowed; opacity: 0.75; }
+.rt-cls-option input { margin-top: 3px; flex: none; }
+.rt-cls-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.rt-cls-refusal { font-size: 12px; color: var(--state-failed-fg); }
+.rt-cls-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-secondary); min-width: 0; }
+.rt-cls-reason { width: 100%; max-width: 100%; box-sizing: border-box; font: inherit; }
+.rt-cls-creds { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; }
+.rt-cls-creds input { max-width: 100%; }
+.rt-cls-msg { margin: 0; font-size: 13px; font-weight: 600; }
+.rt-cls-history summary { cursor: pointer; font-size: 13px; }

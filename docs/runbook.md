@@ -787,15 +787,21 @@ constraint sem `SERVICO_ADICIONAL`; o SQL já estava versionado) e só podia par
 com o motivo em texto. Agora o agente registra um **pedido estruturado** e um **aprovador
 cadastrado** decide no dashboard, escolhendo o banco.
 
-### Uma vez por máquina: aprovador e bancos
+### Uma vez por máquina: bancos
+
+> **Sem aprovador nem senha desde 2026-11-06.** Decisão do Richard: "se eu tenho acesso ja posso executar", até existirem roles.
+> - Quem tem acesso ao Dashboard decide.
+> - O acesso continua limitado a `localhost`: Host local e, quando vier, Origin local **na mesma porta do Dashboard**. Escrita com `Sec-Fetch-Site` diferente de `same-origin`/`none` é recusada. Isso barra páginas de terceiros, outras páginas do próprio localhost (outra porta) e DNS rebinding.
+> - A autoria gravada (`by`) é o usuário do sistema operacional que roda o Dashboard.
+> - O passo 1 abaixo (`approvers.js add`) não é mais necessário. A lib `scripts/lib/approvers.js` continua no repo para quando houver roles.
+> - O risco que isso abre está em **Limite que sobra**, no fim da seção.
 
 Tudo fica em `~/.config/prisma/` (dono = você, diretório 700, arquivos 600, sem symlink — se
 não estiver assim, o dashboard recusa) e no Keychain. **Nada** disso é lido do `.env` do
 consumidor ou de variável de ambiente: um agente escreve no worktree, no `state.json` e no `.env`.
 
 ```bash
-# 1. Aprovador (senha de aprovação pedida sem eco; só o hash scrypt vai para ~/.config/prisma/approvers.json)
-node "$PRISMA_ROOT/scripts/lib/approvers.js" add richard
+# 1. (Não é mais necessário desde 2026-11-06: o Dashboard não pede aprovador.)
 
 # 2. Banco do QA a partir do .properties do app-back (ISO-8859-1/CRLF; só o datasource padrão,
 #    os nomeados como "portal" ficam de fora). Mostra host/banco/usuário mascarados e pede
@@ -824,22 +830,21 @@ node "$PRISMA_ROOT/scripts/lib/db-targets.js" list             # alias, rótulo,
   conexão, nada em env/argv) e devolve as saídas sem senha, usuário, host nem banco.
 - Produção (`env` contendo `prod`, `prd` ou `live`, ou `production: true`) não é selecionável sem
   `allow_production: true` na entrada (`--allow-production`). O nome do banco não decide — `--env` decide.
-- Sem aprovador cadastrado o dashboard recusa toda ação privilegiada (403).
+- Desde 2026-11-06 não há cadastro de aprovador: as ações privilegiadas não pedem senha.
 
 ### Fluxo
 
 1. **Pedido** — o agente roda `node "$PRISMA_ROOT/scripts/lib/authorization.js" request memory/runs/<task-id> --input=<pedido.json>` (esqueleto: `template`). O run vai para `authorization-pending` com o sha256 do `.sql`, o `verify_sql` (só leitura), o esperado, o `then` (`handback_qa` ou `resume:<nó>`) e, no máximo, um `target_hint` — o agente **sugere**, não escolhe o banco. O watcher pula a task (`status_authorization_pending`), **não** passa mensagem livre pelo intérprete e comenta no Redmine uma vez.
-2. **Decisão** — no detalhe do run, caixa "🔐 Autorização": informe aprovador + senha de aprovação e clique **Carregar bancos** (a lista só aparece autenticado: alias, rótulo, ambiente, host/banco mascarados — `"display": "visible"` na entrada mostra). Confira o SQL e o hash e:
+2. **Decisão** — no detalhe do run, caixa "🔐 Autorização": clique **Carregar bancos** (alias, rótulo, ambiente, host/banco mascarados — `"display": "visible"` na entrada mostra). Confira o SQL e o hash e:
    - A caixa mostra o ticket (derivado do task-id, não do `state.json`), o SQL **integral** (sem redação; acima de 200 KB bloqueia em vez de truncar), as checagens que recusaram algo, a nota da devolução ao QA (quando `then` é `handback_qa`) e o **hash do pedido** para o banco escolhido.
    - **Aprovar e executar** (escolhendo o banco): o servidor recalcula o hash do pedido (ticket, artefato + sha256, `verify_sql`, `expected_contains`, `then`, banco) e recusa com `REQUEST_CHANGED` se algo mudou desde a tela; congela a cópia aprovada (com o SQL) em `~/.config/prisma/approved/` e executa **essa** cópia: `verify_sql` antes numa conexão `default_transaction_read_only=on`, o artefato em **uma** transação aberta pelo Node (um comando por mensagem do protocolo estendido; `statement_timeout=60s`/`lock_timeout=5s` fixos na conexão), `verify_sql` depois. Saídas em `memory/runs/<task-id>/authorization/<AUTH-NNN>/` (`pre.txt`, `apply.txt`, `post.txt`, `result.json`). Cada execução é um Attempt DOM06 `db-effect` em `dom06/attempts/`.
    - O artefato é conferido por um tokenizer SQL (strings, `E'…'`, `$tag$…$tag$`, `"…"`, comentários aninhados): recusa `\` fora de literal, `BEGIN/COMMIT/ROLLBACK/END/SAVEPOINT/RELEASE/ABORT/PREPARE TRANSACTION`, `SET/RESET` de `*_timeout`/`ROLE`/`SESSION AUTHORIZATION`, `set_config`, `CONCURRENTLY`, `VACUUM`, `COPY` e afins. O `verify_sql` precisa ser **um** comando só leitura.
    - **Recusar**: volta para `blocked` com o motivo; "Responder ao agente" segue valendo.
    - **Já apliquei manualmente**: registra quem; com banco escolhido, roda só o `verify_sql` para conferir; depois segue o mesmo `then`.
-   - `authorization_history` (append-only) registra o aprovador autenticado, o alias escolhido e o horário — nunca o segredo. O alvo executado é o aprovado: trocar o alias depois exige nova aprovação (`TARGET_CHANGED`).
-   - Sem credencial → 401; aprovador/senha errados → 403 (5 erros em 5 min → 429).
+   - `authorization_history` (append-only) registra quem decidiu (usuário do sistema operacional que roda o Dashboard), o alias escolhido e o horário — nunca o segredo. O alvo executado é o aprovado: trocar o alias depois exige nova aprovação (`TARGET_CHANGED`).
 3. **Desfecho** — sucesso com `then: "resume:<nó>"` → `in_progress` no nó. Com `then: "handback_qa"` → devolução ao QA (abaixo). Falha certa (transação desfeita, alvo recusado, hash mudou, segredo ausente) → `blocked`, fase `failed`. Resultado **incerto** (conexão caiu no meio, timeout) → `blocked`, fase `uncertain`: o Prisma **não** repete; confira no banco e use "Já apliquei manualmente" (ou Recusar).
 
-**Devolver ao QA sem código** (botão "↩ Devolver ao QA" em run `blocked`/`authorization-pending`, também com aprovador; ou automático pelo `then`): nenhum agente é despachado. PUT governado no Redmine (Attempt DOM06 `handback_qa`, header `X-Redmine-API-Key`): status **Ag Teste** (`REDMINE_STATUS_AG_TESTE`, padrão 8), nota com o resumo (alvo/hora do SQL) e "Apontamentos Desenvolvedor" (`REDMINE_CF_APONTAMENTOS_ID`, padrão 2) — os dois textos são editáveis antes de confirmar. Só com o Redmine confirmando o run é arquivado em `<raiz do run>/_archive/` com `status: "handed_back_qa"` (sem entrar no `dashboard-archived.json`, como o arquivamento do `/commit`). 422 → mensagem com o campo exigido; qualquer falha **não** arquiva e o run fica `blocked`. Resultado incerto (5xx/rede) → o próximo clique reaproveita o `operation_id` e confere o marcador `[op handback:<id>]` nos journals antes de repostar. Nova Recusa QA depois: o watcher pula com `recusa_qa_aguardando_retry` e "Corrigir recusa QA" restaura o run arquivado (fluxo normal).
+**Devolver ao QA sem código** (botão "↩ Devolver ao QA" em run `blocked`/`authorization-pending`, sem aprovador desde 2026-11-06; ou automático pelo `then`): nenhum agente é despachado. PUT governado no Redmine (Attempt DOM06 `handback_qa`, header `X-Redmine-API-Key`): status **Ag Teste** (`REDMINE_STATUS_AG_TESTE`, padrão 8), nota com o resumo (alvo/hora do SQL) e "Apontamentos Desenvolvedor" (`REDMINE_CF_APONTAMENTOS_ID`, padrão 2) — os dois textos são editáveis antes de confirmar. Só com o Redmine confirmando o run é arquivado em `<raiz do run>/_archive/` com `status: "handed_back_qa"` (sem entrar no `dashboard-archived.json`, como o arquivamento do `/commit`). 422 → mensagem com o campo exigido; qualquer falha **não** arquiva e o run fica `blocked`. Resultado incerto (5xx/rede) → o próximo clique reaproveita o `operation_id` e confere o marcador `[op handback:<id>]` nos journals antes de repostar. Nova Recusa QA depois: o watcher pula com `recusa_qa_aguardando_retry` e "Corrigir recusa QA" restaura o run arquivado (fluxo normal).
 
 **Run bloqueado antes desta feature (registrar o pedido retroativamente)** — com o watcher **parado** e nenhum agente vivo no run, da raiz do worktree do ticket (o `.sql` é procurado no worktree e, se não estiver, no checkout principal):
 
@@ -852,7 +857,16 @@ JSON
 STATE_EXECUTION_ID= node "$PRISMA_ROOT/scripts/lib/authorization.js" request memory/runs/<task-id> --input=/tmp/pedido.json   # exit 4 = registrado
 ```
 
-**Limite que sobra:** o dashboard continua sem login (só localhost). A senha de aprovação impede
+**Limite que sobra (atualizado em 2026-11-06, sem aprovador):** o dashboard continua sem login e só
+aceita localhost, o que barra visitante de página de terceiros. Com a senha de aprovação removida,
+**nada mais impede "aprovação por texto"**: um processo do mesmo usuário (inclusive um agente
+despachado pelo watcher) pode chamar a API local e decidir sozinho.
+- A **execução de SQL** ainda exige a confirmação física do diálogo do Keychain ("Permitir").
+- **Já apliquei manualmente**, **Recusar**, **Devolver ao QA** (que escreve no Redmine) e o
+  **override de roteamento** não têm mais barreira física.
+- Isso vale até existirem roles.
+
+O texto anterior, mantido para o histórico: a senha de aprovação impedia
 visitante da página e aprovação por texto; a config fora do repo impede quem só escreve no
 worktree/`state.json`/`.env`; o Keychain com ACL vazia impede leitura silenciosa da senha. Mas, sem
 sandbox ou usuário do SO separado para os agentes, um processo do **mesmo usuário** com shell livre

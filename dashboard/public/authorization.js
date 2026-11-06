@@ -2,9 +2,10 @@
 // (state.pending_authorization, scripts/lib/authorization.js) com resumo, SQL com o
 // conteúdo e o hash, e os botões Aprovar / Recusar / Já apliquei manualmente; e o
 // desfecho "Devolver ao QA" (scripts/lib/qa-handback.js) para run blocked/pendente.
-// Toda ação pede aprovador + senha de aprovação (scripts/lib/approvers.js); o banco alvo
-// é escolhido aqui, na lista da allowlist que só aparece depois de autenticar (alias,
-// rótulo, host/banco mascarados). A senha de aprovação fica só nesta caixa, em memória.
+// Sem aprovador nem senha (decisão do Richard em 2026-11-06, até existirem roles): quem
+// tem acesso local ao Dashboard decide, e a autoria é o usuário do sistema operacional.
+// O banco alvo é escolhido aqui, na lista da allowlist (alias, rótulo, host/banco
+// mascarados).
 // O SQL e o pedido aparecem INTEGRAIS (sem redação); a tela mostra o request_hash do
 // pedido para o banco escolhido e o devolve na aprovação — o servidor recusa se o
 // pedido mudou (REQUEST_CHANGED). Antes de aprovar mostra o ticket e a nota da devolução.
@@ -14,9 +15,8 @@
 // do run muda.
 (() => {
   const cache = new Map(); // taskId → { version, data, loading, error, msg, msgCls, busy, opIds, handbackOpen }
-  // Credencial do aprovador: nome lembrado no navegador; senha só em memória.
-  const cred = { name: '', password: '', targets: null, chosen: '' };
-  try { cred.name = localStorage.getItem('authorization.approver') || ''; } catch {}
+  // Bancos da allowlist já carregados e o alvo escolhido.
+  const cred = { targets: null, chosen: '' };
   const STATUS = 'authorization-pending';
 
   function ui(taskId) {
@@ -70,7 +70,7 @@
     const canDecide = ['pending', 'failed', 'uncertain'].includes(p.phase) && !u.busy;
     const why = p.phase !== 'pending' ? '' : a.content == null ? (a.error || 'artefato indisponível') : a.matches !== true ? 'o conteúdo do SQL mudou depois do pedido — peça um novo pedido'
       : problems.length ? 'O SQL foi recusado pelas checagens (abaixo): não dá para aprovar.' : !ex.ok ? ex.error
-        : !cred.targets ? 'Informe aprovador e senha e carregue os bancos para escolher o alvo.' : !chosen ? 'Escolha o banco alvo.' : !hashFor ? 'Atualizando o hash do pedido…' : '';
+        : !cred.targets ? 'Carregue os bancos para escolher o alvo.' : !chosen ? 'Escolha o banco alvo.' : !hashFor ? 'Atualizando o hash do pedido…' : '';
     const hb = p.then === 'handback_qa' ? d.handback?.preview : null;
     const hint = p.target_hint ? [p.target_hint.alias, p.target_hint.datasource && `datasource ${p.target_hint.datasource}`, p.target_hint.env].filter(Boolean).join(' · ') : '—';
     return `
@@ -106,11 +106,8 @@
       ${why ? `<p class="approval-msg">${esc(why)}</p>` : ''}`;
   }
 
-  function credHtml(d) {
-    if (d.approvers_configured === false) return '<p class="approval-msg err">Nenhum aprovador cadastrado: rode <code>node "$PRISMA_ROOT/scripts/lib/approvers.js" add &lt;nome&gt;</code> no terminal. Sem isso nenhuma ação é aceita.</p>';
-    return `<div class="approval-actions auth-cred" role="group" aria-label="Aprovador">
-        <label>Aprovador <input id="authApprover" autocomplete="username" value="${esc(cred.name)}" size="14"></label>
-        <label>Senha de aprovação <input id="authPassword" type="password" autocomplete="current-password" value="${esc(cred.password)}" size="14"></label>
+  function credHtml() {
+    return `<div class="approval-actions auth-cred" role="group" aria-label="Banco alvo">
         <button type="button" class="ghost-btn" data-auth="targets">Carregar bancos</button>
       </div>`;
   }
@@ -151,7 +148,7 @@
     if (!d.pending && !d.handback?.available && !(d.history || []).length) return '';
     return `
       <div class="approval-box auth-box" role="note">
-        ${credHtml(d)}
+        ${credHtml()}
         ${d.pending ? pendingHtml(u, d) : ''}
         ${handbackHtml(u, d)}
         ${u.msg ? `<p class="approval-msg ${esc(u.msgCls || '')}" role="status">${esc(u.msg)}</p>` : ''}
@@ -160,18 +157,15 @@
   }
 
   function readCred() {
-    cred.name = $('authApprover')?.value.trim() ?? cred.name;
-    cred.password = $('authPassword')?.value ?? cred.password;
     cred.chosen = $('authTarget')?.value ?? cred.chosen;
-    try { localStorage.setItem('authorization.approver', cred.name); } catch {}
   }
   function body(taskId, extra) {
-    return JSON.stringify(StateVersion.casBody(runs.get(taskId), { ...extra, approver: cred.name, approver_password: cred.password }));
+    return JSON.stringify(StateVersion.casBody(runs.get(taskId), { ...extra }));
   }
   async function loadTargets(taskId) {
     const u = ui(taskId);
     try {
-      const res = await fetch('/api/authorization/targets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approver: cred.name, approver_password: cred.password }) });
+      const res = await fetch('/api/authorization/targets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
       const out = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
       cred.targets = out.targets || [];
